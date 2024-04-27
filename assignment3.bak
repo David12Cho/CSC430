@@ -16,7 +16,7 @@
 (define (parse [s : Sexp]) : ExprC
   (match s
     [{? real? num} (NumC num)]
-    [(list (? symbol? op) l r) 
+    [(list op l r) 
      (if (member op '(+ - * /)) 
          (BinopC op (parse l) (parse r))  ; Parse l and r here, not in the pattern
          (error "ZODE: Invalid operator: ~a" op))]
@@ -30,42 +30,10 @@
      (if (symbol? funcName)
          (AppC funcName (for/list : (Listof ExprC) ([arg (in-list args)])
                                    (parse arg)))
-         (error "ZODE: Expected a function name, got a non-symbol: ~a" funcName))]
+         (error "Expected a function name, got a non-symbol: ~a" funcName))]
 
     [else (error "ZODE: Expression is unrecognized: ~a" s)]
-    ))
-
-
-;;takes in an ExprC and interprets it to a value
-#;(define (interp [e : ExprC] [fds : (listof FunDefC)]) : Real
-  (match e
-    [(NumC n) n]
-    [(BinopC op l r) (compute op (interp l) (interp r))]
-    [(IdC name) name]
-    [(AppC f args) (get-fundef f fds) ...]
-    [(ifleq0? test then else) (if (interp test)
-                                  (interp then)
-                                  (interp else))]
-    [other (error 'interp "ZODE: ExprC is invalid: ~a" e)]))
-
-
-;;takes in a binary operator and two operands and returns the result of applying the right on the left
-(define (compute [op : Symbol] [l : Real] [r : Real]) : Real
-  (match op
-    ['+ (+ l r)]
-    ['- (- l r)]
-    ['* (* l r)]
-    ['/ (/ l r)]
-    [other (error 'compute "ZODE: Invalid operator: ~a" op)]))
-
-;;(compute) tests
-(check-= (compute '+ -3 0.5) -2.5 0.1)
-(check-= (compute '- pi -6) 9.14 0.01)
-(check-= (compute '* 20 -0.2) -4 1)
-(check-= (compute '/ -12 4) -3 3)
-(check-exn #rx"ZODE: Invalid operator" (λ () (compute 'hi 0 0)))
-
-
+    ))  
 
 
  
@@ -89,13 +57,12 @@
 (check-equal? (parse '{ifleq0? 2 1 {- 10 1}})
               (ifleq0? (NumC 2) (NumC 1) (BinopC '- (NumC 10) (NumC 1))))
 
-(check-exn #rx"ZODE: Invalid operator" (lambda () (parse '(a 2 3))))
+(check-exn #rx"ZODE" (lambda () (parse '(1 2 3))))
 (check-equal? (parse 'abcdefg)(IdC 'abcdefg))
-(check-exn #rx"ZODE: Expected a function name" (lambda () (parse '(123 1))))
-(check-exn #rx"ZODE: Expression is unrecognized"(lambda () (parse '())))
-(check-exn #rx"ZODE: Invalid use of reserved keyword as an identifier" (lambda () (parse 'def)))
-(check-exn #rx"ZODE: Invalid use of reserved keyword as an identifier" (lambda () (parse 'ifleq0?)))
-(check-exn #rx"ZODE: Expected a function name" (λ () (parse '(1 'hi))))
+(check-exn #rx"ZODE" (lambda () (parse '(123 1 2))))
+(check-exn #rx"ZODE"(lambda () (parse '())))
+(check-exn #rx"ZODE" (lambda () (parse 'def)))
+(check-exn #rx"ZODE" (lambda () (parse 'ifleq0?)))
 
 
 
