@@ -1,3 +1,5 @@
+;Implemented all of the parser except function definitions, implemented all of interp except multiple parameter functions
+
 #lang typed/racket
 (require typed/rackunit)
 
@@ -64,15 +66,14 @@
   (match e
     [(NumC n) n]
     [(BinopC op l r) (compute op (interp l fds) (interp r fds))]
-    [(IdC name) (error 'interp "Interp shouldn't get here, given IdC: ~a" e)]
+    [(IdC name) (error 'interp "ZODE: Interp shouldn't get here, given IdC: ~a" e)]
     [(AppC f arg) (interp (subst (interp arg fds)
                                  (FundefC-param (get-fundef f fds))
                                  (FundefC-body (get-fundef f fds)))
                           fds)]
     [(ifleq0? test then else) (if (<= (interp test fds) 0)
                                   (interp then fds)
-                                  (interp else fds))]
-    [other (error 'interp "ZODE: ExprC is invalid: ~a" e)]))
+                                  (interp else fds))]))
 
 
 ;;takes in a symbol and list of functions and returns a FundefC if the symbol is a name of one of the functions
@@ -117,7 +118,8 @@
 ;get-fundef tests
 (define f (FundefC 'five 'x (NumC 5)))
 (define g (FundefC 'hi 'y (IdC 'hello)))
-(check-equal? (get-fundef 'five (list g f)) f)
+(define defs (list g f))
+(check-equal? (get-fundef 'five defs) f)
 (check-exn #rx"ZODE: Function name not recognized" (λ () (get-fundef 'dne (list g))))
 
 
@@ -128,7 +130,11 @@
                                (BinopC '+
                                        (NumC 1)
                                        (NumC 2)))
-                      (list f g)) 2)
+                      defs) 3)
+(check-exn #rx"ZODE: Interp shouldn't get here" (λ () (interp (ifleq0? (NumC 0)
+                                                                       (IdC 'oops)
+                                                                       (NumC pi))
+                                                              defs)))
 
 ;subst tests
 (check-equal? (subst 0
