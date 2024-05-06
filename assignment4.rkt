@@ -126,7 +126,6 @@
 (define (extend-env [params : (Listof Symbol)] [args : (Listof ExprC)] [env : Env]) : Env
   (match* (params args)
     [('() '()) '()]
-    [((cons first-param rest-param) (cons first-arg rest-arg)) (cons (Bind first-param (interp first-arg env)) (extend-env rest-param rest-arg env))]
     [((cons first-param rest-param) (cons first-arg rest-arg)) (cons (Bind first-param
                                                                            (interp first-arg env))
                                                                      (extend-env rest-param
