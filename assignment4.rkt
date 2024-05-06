@@ -41,8 +41,13 @@
 ; takes in an Sexp and converts it into an AppC representation of a locals
 (define (parse-locals [s : Sexp]) : AppC
   (match s
-    [(cons ': (? list? r)) (let ([clauses (parse-clauses (split-clauses (cast (drop-right r 1) (Listof Sexp))))])
-                   (AppC (LambC (cast (first clauses) (Listof Symbol)) (parse (last r))) (cast (second clauses) (Listof ExprC))))]))
+    [(cons ': (? list? r)) (let ([clauses (parse-clauses (split-clauses (cast (drop-right r 1)
+                                                                              (Listof Sexp))))])
+                   (AppC (LambC (cast (first clauses)
+                                      (Listof Symbol))
+                                (parse (last r)))
+                         (cast (second clauses)
+                               (Listof ExprC))))]))
 
 ; takes in an Sexp and converts it into a list of parameters (Symbols) and a list of their values (ExprC)
 (define (parse-clauses [s : (Listof Sexp)]) :  (Listof (U (Listof Symbol) (Listof ExprC)))
@@ -64,9 +69,10 @@
 ; takes in an Sexp and converts it into a LambC
 (define (parse-lamb [s : Sexp]) : LambC
   (match s
-    [(list ': (? symbol? params) ... ': body) (if (check-duplicates params)
-                                                  (error 'parse-lamb "ZODE: Same name is used for multiple parameters in: ~e" s)
-                                                  (LambC (cast params (Listof Symbol)) (parse body)))]
+    [(list ': (? symbol? params) ... ': body)
+     (if (check-duplicates params)
+         (error 'parse-lamb "ZODE: Same name is used for multiple parameters in: ~e" s)
+         (LambC (cast params (Listof Symbol)) (parse body)))]
     [other (error 'parse-lamb "ZODE: Invalid use of 'lamb': lamb ~e" s)]))
 
 
@@ -88,7 +94,7 @@
 (define-type Env (Listof Bind))
 
 
-; takes in an ExprC and interprets it into a value
+; takes in an ExprC and interprets it into a value in the given environment
 (define (interp [e : ExprC] [env : Env]) : Value
   (match e
     [(NumC n) n]
@@ -121,6 +127,10 @@
   (match* (params args)
     [('() '()) '()]
     [((cons first-param rest-param) (cons first-arg rest-arg)) (cons (Bind first-param (interp first-arg env)) (extend-env rest-param rest-arg env))]
+    [((cons first-param rest-param) (cons first-arg rest-arg)) (cons (Bind first-param
+                                                                           (interp first-arg env))
+                                                                     (extend-env rest-param
+                                                                                 rest-arg env))]
     [(some other) (error 'extend-env "ZODE: Incorrect number of arguments, expected ~e, got ~e" params args)]))
 
 
@@ -138,7 +148,12 @@
 (check-exn #rx"ZODE: Invalid use of 'if'" (λ () (parse  '{if : not : enough})))
 
 ; parse-locals tests
-(check-equal? (parse '{locals : var = "var" : pi = 3.14 : pi}) (AppC (LambC '(var pi) (IdC 'pi)) (list (StrC "var") (NumC 3.14))))
+(check-equal? (parse '{locals : var = "var"
+                              : pi = 3.14
+                              : pi}) (AppC (LambC '(var pi)
+                                                  (IdC 'pi))
+                                           (list (StrC "var")
+                                                 (NumC 3.14))))
 (check-exn #rx"ZODE: Incorrect number of parameters in clauses" (λ () (parse '{locals : "hi" : 'm})))
 (check-exn #rx"ZODE: Clauses not formatted correctly" (λ () (parse '{locals : 1 2 3 : 'no})))
 
@@ -160,9 +175,22 @@
 (check-equal? (parse '{{lamb : z : test}}) (AppC (LambC '(z) (IdC 'test)) '()))
 
 ; interp tests
-(check-equal? (interp (IfC (IdC 'true) (AppC (LambC '(x y) (IdC 'x)) (list (NumC 0) (StrC "dummy"))) (IdC 'false)) (list (Bind 'true #t) (Bind 'false #f))) 0)
-(check-exn #rx"ZODE: Cannot apply as a function" (λ () (interp (IfC (IdC 'false) (IdC 'bye) (AppC (NumC pi) '())) (list (Bind 'false #f)))))
-(check-exn #rx"ZODE: If test statement is not a bool" (λ () (interp (IfC (NumC -0.5) (StrC "doesn't") (StrC "matter")) '())))
+(check-equal? (interp (IfC (IdC 'true)
+                           (AppC (LambC '(x y)
+                                        (IdC 'x))
+                                 (list (NumC 0)
+                                       (StrC "dummy")))
+                           (IdC 'false)) (list (Bind 'true #t)
+                                               (Bind 'false #f)))
+              0)
+(check-exn #rx"ZODE: Cannot apply as a function" (λ () (interp (IfC (IdC 'false)
+                                                                    (IdC 'bye)
+                                                                    (AppC (NumC pi) '()))
+                                                               (list (Bind 'false #f)))))
+(check-exn #rx"ZODE: If test statement is not a bool" (λ () (interp (IfC (NumC -0.5)
+                                                                         (StrC "doesn't")
+                                                                         (StrC "matter"))
+                                                                    '())))
 
 ; lookup tests
 (check-equal? (lookup 'here (list (Bind 'here #t) (Bind 'nothere "nope"))) #t)
