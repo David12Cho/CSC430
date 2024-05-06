@@ -79,6 +79,51 @@
                                   (parse (cast arg Sexp))))]))
 
 
+; define Value type
+(define-type Value (U Real String Boolean CloV))
+(struct CloV ([params : (Listof Symbol)] [body : ExprC] [env : Env]) #:transparent)
+
+; define types for environments
+(struct Bind ([name : Symbol] [val : Value]) #:transparent)
+(define-type Env (Listof Bind))
+
+
+; takes in an ExprC and interprets it into a value
+(define (interp [e : ExprC] [env : Env]) : Value
+  (match e
+    [(NumC n) n]
+    [(IdC sym) (lookup sym env)]
+    [(StrC str) str]
+    [(IfC test then else) (let ([bool-test (interp test env)])
+                            (if (not (boolean? bool-test))
+                                (error 'interp "ZODE: If test statement is not a bool: ~e" e)
+                                (if (boolean=? #t bool-test)
+                                    (interp then env)
+                                    (interp else env))))]
+    [(LambC params body) (CloV params body env)]
+    [(AppC func args) (let ([f (interp func env)])
+                        (if (CloV? f)
+                            (interp (CloV-body f)
+                                    (extend-env (CloV-params f) args (CloV-env f)))
+                            (error 'interp "ZODE: Cannot apply as a function: ~e" f)))]))
+
+
+; takes in a Symbol and returns the corresponding value in the environment if it exists
+(define (lookup [for : Symbol] [env : Env]) : Value
+  (match env
+    ['() (error 'lookup "ZODE: Variable name not found: ~e" for)]
+    [(cons f r) (if (symbol=? for (Bind-name f))
+             (Bind-val f)
+             (lookup for r))]))
+
+; takes in a list of parameters and a list of arguments and extends an environment by binding the corresponding values
+(define (extend-env [params : (Listof Symbol)] [args : (Listof ExprC)] [env : Env]) : Env
+  (match* (params args)
+    [('() '()) '()]
+    [((cons first-param rest-param) (cons first-arg rest-arg)) (cons (Bind first-param (interp first-arg env)) (extend-env rest-param rest-arg env))]
+    [(some other) (error 'extend-env "ZODE: Incorrect number of arguments, expected ~e, got ~e" params args)]))
+
+
 
 
 ; parse tests
@@ -113,3 +158,16 @@
 ; parse-app tests
 (check-equal? (parse '{{lamb : y : 1} 0}) (AppC (LambC '(y) (NumC 1)) (list (NumC 0))))
 (check-equal? (parse '{{lamb : z : test}}) (AppC (LambC '(z) (IdC 'test)) '()))
+
+; interp tests
+(check-equal? (interp (IfC (IdC 'true) (AppC (LambC '(x y) (IdC 'x)) (list (NumC 0) (StrC "dummy"))) (IdC 'false)) (list (Bind 'true #t) (Bind 'false #f))) 0)
+(check-exn #rx"ZODE: Cannot apply as a function" (λ () (interp (IfC (IdC 'false) (IdC 'bye) (AppC (NumC pi) '())) (list (Bind 'false #f)))))
+(check-exn #rx"ZODE: If test statement is not a bool" (λ () (interp (IfC (NumC -0.5) (StrC "doesn't") (StrC "matter")) '())))
+
+; lookup tests
+(check-equal? (lookup 'here (list (Bind 'here #t) (Bind 'nothere "nope"))) #t)
+(check-exn #rx"ZODE: Variable name not found" (λ () (lookup 'dne (list (Bind 'lock 10)))))
+
+; extend-env tests
+(check-equal? (extend-env '(a b c) (list (NumC 1) (NumC 2) (NumC 3)) '()) (list (Bind 'a 1) (Bind 'b 2) (Bind 'c 3)))
+(check-exn #rx"Incorrect number of arguments" (λ () (extend-env '(x) '() '())))
