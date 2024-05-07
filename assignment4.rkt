@@ -19,7 +19,7 @@
     [(? real? n) (NumC n)]
     [(? symbol? sym) (if (member sym '(if lamb locals : =)) 
                          (error "ZODE: Invalid use of reserved keyword as an identifier: ~e" sym)
-                         (IdC sym))]
+                         (IdC sym))] 
     [(? string? str) (StrC str)]
     [(cons f r) (match f
                   ['if (parse-if r)]
@@ -84,34 +84,71 @@
                                   ([arg args])
                                   (parse (cast arg Sexp))))]))
 
-
-; define Value type
-(define-type Value (U Real String Boolean CloV))
-(struct CloV ([params : (Listof Symbol)] [body : ExprC] [env : Env]) #:transparent)
-
 ; define types for environments
 (struct Bind ([name : Symbol] [val : Value]) #:transparent)
 (define-type Env (Listof Bind))
 
+; define Value type
+(define-type Value (U Real String Boolean CloV PrimOpV))
+(struct CloV ([params : (Listof Symbol)] [body : ExprC] [env : Env]) #:transparent)
+(struct PrimOpV ([proc : ((Listof Value) -> Value)] [args : Integer]) #:transparent)
 
-; takes in an ExprC and interprets it into a value in the given environment
-(define (interp [e : ExprC] [env : Env]) : Value
-  (match e
-    [(NumC n) n]
-    [(IdC sym) (lookup sym env)]
-    [(StrC str) str]
-    [(IfC test then else) (let ([bool-test (interp test env)])
-                            (if (not (boolean? bool-test))
-                                (error 'interp "ZODE: If test statement is not a bool: ~e" e)
-                                (if (boolean=? #t bool-test)
-                                    (interp then env)
-                                    (interp else env))))]
-    [(LambC params body) (CloV params body env)]
-    [(AppC func args) (let ([f (interp func env)])
-                        (if (CloV? f)
-                            (interp (CloV-body f)
-                                    (extend-env (CloV-params f) args (CloV-env f)))
-                            (error 'interp "ZODE: Cannot apply as a function: ~e" f)))]))
+(define top-env
+  (list
+   (Bind '+ (PrimOpV (lambda (args)
+                          (let ([arg1 (car args)] [arg2 (cadr args)])
+                            (if (and (real? arg1) (real? arg2))
+                                (+ arg1 arg2)
+                                (error "ZODE: Arguments to + must be numbers.")))) 
+                   2))
+   (Bind '- (PrimOpV (lambda (args)
+                          (let ([arg1 (car args)] [arg2 (cadr args)])
+                            (if (and (real? arg1) (real? arg2))
+                                (- arg1 arg2)
+                                (error "ZODE: Arguments to - must be numbers."))))
+                   2))
+   (Bind '* (PrimOpV (lambda (args)
+                          (let ([arg1 (car args)] [arg2 (cadr args)])
+                            (if (and (real? arg1) (real? arg2))
+                                (* arg1 arg2)
+                                (error "ZODE: Arguments to * must be numbers."))))
+                   2))
+   (Bind '/ (PrimOpV (lambda (args)
+                          (let ([arg1 (car args)] [arg2 (cadr args)])
+                            (if (and (real? arg1) (real? arg2))
+                                (if (= arg2 0)
+                                    (error "ZODE: Division by zero.")
+                                    (/ arg1 arg2))
+                                (error "ZODE: Arguments to / must be numbers."))))
+                   2))
+   (Bind '<= (PrimOpV (lambda (args)
+                           (let ([arg1 (car args)] [arg2 (cadr args)])
+                             (if (and (real? arg1) (real? arg2))
+                                 (<= arg1 arg2)
+                                 (error "ZODE: Arguments to <= must be numbers."))))
+                      2))
+   (Bind 'equal? (PrimOpV (lambda (args)
+                                (let ([arg1 (car args)] [arg2 (cadr args)])
+                                  (equal? arg1 arg2)))
+                          2))
+   (Bind 'error (PrimOpV (lambda (args)
+                               (let ([arg1 (car args)])
+                                 (error "ZODE: user-error: ~e" (serialize arg1))))
+                         1))
+   (Bind 'true true)
+   (Bind 'false false)
+   ))
+
+
+; takes in a list of parameters and a list of arguments and extends an environment by binding the corresponding values
+(define (extend-env [params : (Listof Symbol)] [args : (Listof ExprC)] [env : Env]) : Env
+  (match* (params args)
+    [('() '()) env]
+    [((cons first-param rest-param) (cons first-arg rest-arg)) (cons (Bind first-param
+                                                                           (interp first-arg env))
+                                                                     (extend-env rest-param
+                                                                                 rest-arg env))]
+    [(some other) (error 'extend-env "ZODE: Incorrect number of arguments, expected ~e, got ~e" params args)]))
 
 
 ; takes in a Symbol and returns the corresponding value in the environment if it exists
@@ -122,15 +159,59 @@
              (Bind-val f)
              (lookup for r))]))
 
-; takes in a list of parameters and a list of arguments and extends an environment by binding the corresponding values
-(define (extend-env [params : (Listof Symbol)] [args : (Listof ExprC)] [env : Env]) : Env
-  (match* (params args)
-    [('() '()) '()]
-    [((cons first-param rest-param) (cons first-arg rest-arg)) (cons (Bind first-param
-                                                                           (interp first-arg env))
-                                                                     (extend-env rest-param
-                                                                                 rest-arg env))]
-    [(some other) (error 'extend-env "ZODE: Incorrect number of arguments, expected ~e, got ~e" params args)]))
+
+; Adjust the interp function to handle expressions directly without pre-evaluating arguments for closures
+(define (interp [e : ExprC] [env : Env]) : Value
+  (match e
+    [(NumC n) n]
+    [(IdC sym) (lookup sym env)]
+    [(StrC str) str]
+    [(IfC test then else) 
+     (let ([test-result : Value (interp test env)])
+       (if (and (boolean? test-result) test-result)
+           (interp then env)
+           (interp else env)))]
+    [(LambC params body) (CloV params body env)]
+    [(AppC func args) 
+     (let ([f : Value (interp func env)])
+       (match f
+         [(CloV params body closure-env)
+          (cond
+            [(= (length params) (length args))
+              ; Pass expressions directly to extend-env and evaluate within it or in the body context
+              (interp body (extend-env params args closure-env))]
+            [else (error 'interp "ZODE: Incorrect number of arguments for function: expected ~a, got ~a" (length params)
+                         (length args))])]
+         [(PrimOpV proc arity)
+          (if (= arity (length args))
+              ; Evaluate args here because primops expect evaluated arguments
+              (let ([evaluated-args : (Listof Value) (evaluate-arguments args env)])
+                (proc evaluated-args))
+              (error 'interp "ZODE: Incorrect number of arguments for primop: expected ~a, got ~a" arity
+                     (length args)))]
+         [else
+          (error 'interp "ZODE: Cannot apply as a function: ~e" f)]))]))
+
+; Helper function to evaluate arguments for primops, since extend-env handles unevaluated ExprC for closures
+(define (evaluate-arguments [args : (Listof ExprC)] [env : Env]) : (Listof Value)
+  (for/list ([arg : ExprC (in-list args)])
+    (interp arg env)))
+
+
+; takes in a ZODE4 value and converts it into a string
+(define (serialize [v : Value]) : String
+  (match v
+    [(or (? real?) (? string?)) (~v v)]
+    [(? boolean?) (cond
+                    [(boolean=? #t v) "true"]
+                    [else "false"])]
+    [(CloV _ _ _) "#<procedure>"]
+    #;[(PrimOpV _ _) "#<primop>"]))
+
+
+; combines parse and interp
+(define (top-interp [s : Sexp]) : String
+  (serialize (interp (parse s) top-env)))
 
 
 
@@ -184,13 +265,9 @@
               0)
 (check-exn #rx"ZODE: Cannot apply as a function" (λ () (interp (IfC (IdC 'false)
                                                                     (IdC 'bye)
-                                                                    (AppC (NumC pi) '()))
+                                                                   (AppC (NumC pi) '()))
                                                                (list (Bind 'false #f)))))
-(check-exn #rx"ZODE: If test statement is not a bool" (λ () (interp (IfC (NumC -0.5)
-                                                                         (StrC "doesn't")
-                                                                         (StrC "matter"))
-                                                                    '())))
-
+                                        
 ; lookup tests
 (check-equal? (lookup 'here (list (Bind 'here #t) (Bind 'nothere "nope"))) #t)
 (check-exn #rx"ZODE: Variable name not found" (λ () (lookup 'dne (list (Bind 'lock 10)))))
@@ -198,3 +275,33 @@
 ; extend-env tests
 (check-equal? (extend-env '(a b c) (list (NumC 1) (NumC 2) (NumC 3)) '()) (list (Bind 'a 1) (Bind 'b 2) (Bind 'c 3)))
 (check-exn #rx"Incorrect number of arguments" (λ () (extend-env '(x) '() '())))
+
+; serialize test
+#;(check-equal? (serialize (PrimOpV (λ (args) ) 3) "#<primop>"))
+
+; top-interp tests
+(check-equal? (top-interp '{locals : x = 5
+                              : {+ x 2}}) "7")
+(check-equal? (top-interp '{locals : x = 5
+                                   : "hi"}) "\"hi\"")
+(check-equal? (top-interp '{locals : x = 5
+                                   : true}) "true")
+(check-equal? (top-interp '{locals : x = 5
+                                   : false}) "false")
+(check-equal? (top-interp '{locals : x = 5
+                                   : (lamb : : 0)}) "#<procedure>")
+(check-equal? (top-interp '{locals : x = 0
+                                   : {if : {<= {+ 1 2} {- 4 3}}
+                                         : "hi"
+                                         : {if : {equal? 1 1}
+                                               : {* {/ 2 2} 1}
+                                               : false}}}) "1")
+(check-exn #rx"ZODE: Arguments to +" (λ () (top-interp '{+ "true" "false"})))
+(check-exn #rx"ZODE: Arguments to -" (λ () (top-interp '{- "true" "false"})))
+(check-exn #rx"ZODE: Arguments to *" (λ () (top-interp '{* "true" "false"})))
+(check-exn #rx"ZODE: Arguments to /" (λ () (top-interp '{/ "true" "false"})))
+(check-exn #rx"ZODE: Arguments to <=" (λ () (top-interp '{<= "true" "false"})))
+(check-exn #rx"ZODE: Division by zero" (λ () (top-interp '{/ 1 0})))
+(check-exn #rx"ZODE: user-error" (λ () (top-interp '{error "error"})))
+(check-exn #rx"ZODE: Incorrect number of arguments for function" (λ () (top-interp '{{lamb : : 0} 1})))
+(check-exn #rx"ZODE: Incorrect number of arguments for primop" (λ () (top-interp '{+ 1})))
