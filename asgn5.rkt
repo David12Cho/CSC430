@@ -115,7 +115,12 @@
   (define (rec-concat [lst : (Listof Value)] [acc : String]) : String
     (if (null? lst)
         acc  ; Return the accumulated string when no more elements are left
-        (rec-concat (cdr lst) (string-append acc (serialize (car lst))))))
+        (let ([current (car lst)])
+          (rec-concat (cdr lst) 
+                      (string-append acc 
+                                     (match current
+                                       [(? string?) current]
+                                       [_ (serialize current)]))))))
   (rec-concat args ""))  ; Start with an empty string as the accumulator
 
 
