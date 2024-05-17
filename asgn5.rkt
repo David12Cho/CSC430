@@ -134,7 +134,11 @@
         env))
 
 
-
+; Prints a string with a new line.
+(define (println [args : (Listof Value)]) : Value
+  (match args
+    [(list (StrC s)) (printf "~a\n" s) #t]
+    [_ (error 'println "ZODE: println expects a single string argument.")]))
 
 
 
@@ -398,5 +402,4 @@
 (check-equal? (concatenate (list "Data" " " "Science"))
               "Data Science"
               "concatenate should combine words into a phrase")
-
 
