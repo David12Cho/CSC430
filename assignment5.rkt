@@ -1,3 +1,5 @@
+; Fully implemented, some unknown errors.
+
 #lang typed/racket
 (require typed/rackunit)
 
@@ -63,7 +65,7 @@
 (define (split-clauses [s : (Listof Sexp)]) : (Listof (Listof Sexp))
   (match (length s)
     [4 (list s)]
-    [(? real? n) (if (> n 4)
+    [(? real? n)  (if (> n 4)
                      (cons (take s 4) (split-clauses (drop s 4)))
                      (error 'split-clauses "ZODE: Incorrect number of parameters in clauses: ~e" s))]))
 
@@ -367,3 +369,19 @@
 (check-exn #rx"ZODE: seq requires at least" (λ () (top-interp '{seq})))
 (check-equal? (top-interp '{++ 0 " as a string is "
                                {locals : x = 1 : "zero"}}) "\"0 as a string is zero\"")
+
+
+
+
+; ZODE program
+(define rps '{locals : game = {lamb : : {seq {println "Enter your next move (rock/paper/scissors)>"}
+                                             {locals : in = {read-str}
+                                                     : {seq {if : {equal? in "rock"}
+                                                                : {println "I play paper."}
+                                                                : {if : {equal? in "paper"}
+                                                                      : {println "I play scissors."}
+                                                                      : {if : {equal? in "scissors"}
+                                                                            : {println "I play rock."}
+                                                                            : {println "That's not allowed."}}}}
+                                                            {println "I win. You lose."}}}}}
+                     : {game}})
