@@ -1,8 +1,10 @@
+; Fully implemented, some unknown errors.
+
 #lang typed/racket
 (require typed/rackunit)
 
 ; define type for ExprC
-(define-type ExprC (U NumC IdC StrC IfC LambC AppC SeqC))
+(define-type ExprC (U NumC IdC StrC IfC LambC AppC))
 
 ; structs for ExprC types
 (struct NumC ([n : Real]) #:transparent)
@@ -11,8 +13,6 @@
 (struct IfC ([test : ExprC] [then : ExprC] [else : ExprC]) #:transparent)
 (struct LambC ([params : (Listof Symbol)] [body : ExprC]) #:transparent)
 (struct AppC ([func : ExprC] [args : (Listof ExprC)]) #:transparent)
-(struct SeqC ([exprs : (Listof ExprC)]) #:transparent)
-
 
 
 ; takes in an Sexp and converts it into an ExprC
@@ -28,7 +28,7 @@
                   ['locals (parse-locals r)]
                   ['lamb (parse-lamb r)]
                   [other (parse-app s)])]
-    [other (error 'parse "ZODE: Invalid concrete syntax, cannot parse: ~e" s)])) 
+    [other (error 'parse "ZODE: Invalid concrete syntax, cannot parse: ~e" s)]))
 
 
 ; takes in an Sexp and converts it into an IfC
@@ -45,11 +45,13 @@
   (match s
     [(cons ': (? list? r)) (let ([clauses (parse-clauses (split-clauses (cast (drop-right r 1)
                                                                               (Listof Sexp))))])
-                   (AppC (LambC (cast (first clauses)
-                                      (Listof Symbol))
-                                (parse (last r)))
-                         (cast (second clauses)
-                               (Listof ExprC))))]))
+                             (if (check-duplicates (first clauses))
+                                 (error 'parse-locals "ZODE: Cannot have two parameters with the same name: ~e" clauses)
+                                 (AppC (LambC (cast (first clauses)
+                                                    (Listof Symbol))
+                                              (parse (last r)))
+                                       (cast (second clauses)
+                                             (Listof ExprC)))))]))
 
 ; takes in an Sexp and converts it into a list of parameters (Symbols) and a list of their values (ExprC)
 (define (parse-clauses [s : (Listof Sexp)]) :  (Listof (U (Listof Symbol) (Listof ExprC)))
@@ -63,7 +65,7 @@
 (define (split-clauses [s : (Listof Sexp)]) : (Listof (Listof Sexp))
   (match (length s)
     [4 (list s)]
-    [(? real? n) (if (> n 4)
+    [(? real? n)  (if (> n 4)
                      (cons (take s 4) (split-clauses (drop s 4)))
                      (error 'split-clauses "ZODE: Incorrect number of parameters in clauses: ~e" s))]))
 
@@ -90,123 +92,104 @@
 (struct Bind ([name : Symbol] [val : Value]) #:transparent)
 (define-type Env (Listof Bind))
 
-; Assuming serialize handles value to string conversion
-(define (concatenate-strings [args : (Listof Value)]) : Value
-  (string-join (map serialize args) ""))  ; Joins all strings without a delimiter
-
-; Function to evaluate a sequence of expressions and return the last result
-(define (seq [args : (Listof Value)]) : Value
-  (define (rec-seq [lst : (Listof Value)] [last-val : Value]) : Value 
-    (if (null? lst)
-        last-val
-        (rec-seq (cdr lst) (car lst))))
-  (if (null? args)
-      (error "ZODE: seq: No expressions provided")
-      (rec-seq (cdr args) (car args))))
-
-; Add 'seq' to the environment with type annotations and variable arity
-(define (extend-with-seq [env : Env]) : Env
-  (cons (Bind 'seq (PrimOpV (lambda ([args : (Listof Value)]) : Value
-                             (seq args))
-                          -1)) ; Using -1 or another special value to indicate variable arity
-        env))
-
-(define (concatenate [args : (Listof Value)]) : String
-  (define (rec-concat [lst : (Listof Value)] [acc : String]) : String
-    (if (null? lst)
-        acc  ; Return the accumulated string when no more elements are left
-        (rec-concat (cdr lst) (string-append acc (serialize (car lst))))))
-  (rec-concat args ""))  ; Start with an empty string as the accumulator
-
-
-
-
-; Assuming we allow variable arity, we might use a special marker or a negative value to indicate this
-(define (extend-with-concatenate [env : Env]) : Env
-  (cons (Bind '++ (PrimOpV (lambda ([args : (Listof Value)]) : Value
-                             (concatenate args))
-                          -1)) ; -1 or some other special value to denote variable arity
-        env))
-
-
-
-
-
-
 ; define Value type
 (define-type Value (U Real String Boolean CloV PrimOpV))
 (struct CloV ([params : (Listof Symbol)] [body : ExprC] [env : Env]) #:transparent)
-;;(struct PrimOpV ([proc : ((Listof Value) -> Value)]) #:transparent)
-(struct PrimOpV ([proc : ((Listof Value) -> Value)] [args : Integer]) #:transparent)
+(struct PrimOpV ([proc : ((Listof ExprC) Env -> Value)] [args : Integer]) #:transparent)
+
+; takes in a list of ExprC, evaluates them and returns the last value
+(define (seq [args : (Listof ExprC)] [env : Env]) : Value
+  (match args
+    [(cons f '()) (interp f env)]
+    [(cons f r) (begin (interp f env)
+                       (seq r env))]
+    [other (error 'seq "ZODE: seq requires at least one expression to evaluate")]))
+
+; takes in a list of ExprC, serializes them and concatenates the result
+(define (concat [exps : (Listof ExprC)] [env : Env]) : String
+  (string-join (for/list : (Listof String) ([e  exps])
+                 (let ([val (interp e env)])
+                   (if (string? val)
+                       val
+                       (serialize val))))
+               ""))
 
 (define top-env
   (list
-   (Bind '+ (PrimOpV (lambda (args)
-                          (let ([arg1 (car args)] [arg2 (cadr args)])
+   (Bind '+ (PrimOpV (lambda ([args : (Listof ExprC)] [env : Env])
+                          (let ([arg1 (interp (car args) env)] [arg2 (interp (cadr args) env)])
                             (if (and (real? arg1) (real? arg2))
                                 (+ arg1 arg2)
                                 (error "ZODE: Arguments to + must be numbers.")))) 
                    2))
-   (Bind '- (PrimOpV (lambda (args)
-                          (let ([arg1 (car args)] [arg2 (cadr args)])
+   (Bind '- (PrimOpV (lambda ([args : (Listof ExprC)] [env : Env])
+                          (let ([arg1 (interp (car args) env)] [arg2 (interp (cadr args) env)])
                             (if (and (real? arg1) (real? arg2))
                                 (- arg1 arg2)
                                 (error "ZODE: Arguments to - must be numbers."))))
                    2))
-   (Bind '* (PrimOpV (lambda (args)
-                          (let ([arg1 (car args)] [arg2 (cadr args)])
+   (Bind '* (PrimOpV (lambda ([args : (Listof ExprC)] [env : Env])
+                          (let ([arg1 (interp (car args) env)] [arg2 (interp (cadr args) env)])
                             (if (and (real? arg1) (real? arg2))
                                 (* arg1 arg2)
                                 (error "ZODE: Arguments to * must be numbers."))))
                    2))
-   (Bind '/ (PrimOpV (lambda (args)
-                          (let ([arg1 (car args)] [arg2 (cadr args)])
+   (Bind '/ (PrimOpV (lambda ([args : (Listof ExprC)] [env : Env])
+                          (let ([arg1 (interp (car args) env)] [arg2 (interp (cadr args) env)])
                             (if (and (real? arg1) (real? arg2))
                                 (if (= arg2 0)
                                     (error "ZODE: Division by zero.")
                                     (/ arg1 arg2))
                                 (error "ZODE: Arguments to / must be numbers."))))
                    2))
-   (Bind '<= (PrimOpV (lambda (args)
-                           (let ([arg1 (car args)] [arg2 (cadr args)])
+   (Bind '<= (PrimOpV (lambda ([args : (Listof ExprC)] [env : Env])
+                           (let ([arg1 (interp (car args) env)] [arg2 (interp (cadr args) env)])
                              (if (and (real? arg1) (real? arg2))
                                  (<= arg1 arg2)
                                  (error "ZODE: Arguments to <= must be numbers."))))
                       2))
-   (Bind 'equal? (PrimOpV (lambda (args)
-                                (let ([arg1 (car args)] [arg2 (cadr args)])
+   (Bind 'equal? (PrimOpV (lambda ([args : (Listof ExprC)] [env : Env])
+                                (let ([arg1 (interp (car args) env)] [arg2 (interp (cadr args) env)])
                                   (equal? arg1 arg2)))
                           2))
-   (Bind '++ (PrimOpV (lambda (args)
-                    (apply string-append (map serialize args))) 
-                   -1))  ; -1 arity to indicate variable number of arguments
-   (Bind 'error (PrimOpV (lambda (args)
-                               (let ([arg1 (car args)])
+   (Bind 'error (PrimOpV (lambda ([args : (Listof ExprC)] [env : Env])
+                               (let ([arg1 (interp (car args) env)])
                                  (error "ZODE: user-error: ~e" (serialize arg1))))
                          1))
    (Bind 'true true)
    (Bind 'false false)
-   (Bind 'println (PrimOpV (λ (args)
-                             (let ([arg1 (car args)])
+   (Bind 'println (PrimOpV (λ ([args : (Listof ExprC)] [env : Env])
+                             (let ([arg1 (interp (car args) env)])
                                (if (string? arg1)
                                    (begin (printf "~v\n"
                                                   arg1)
                                           #t)
                                    #f)))
                            1))
-   (Bind 'read-num (PrimOpV (λ (args)
+   (Bind 'read-num (PrimOpV (λ ([args : (Listof ExprC)] [env : Env])
                               (begin (printf ">")
-                                     (let ([input (string->number (cast (read-line) String))])
-                                       (if (real? input)
-                                           input
-                                           (error 'read-num "ZODE: Input is not a real number: ~e" input)))))
+                                     (let ([input (read-line)])
+                                       (match input
+                                         [(? string?) (let ([input (string->number input)])
+                                                        (if (real? input)
+                                                            input
+                                                            (error 'read-num "ZODE: Input is not a real number: ~e"
+                                                                   input)))]
+                                         [(? eof-object?) (error 'read-num "ZODE: Invalid input: ~e" input)]))))
                             0))
-   (Bind '++ (PrimOpV concatenate-strings -1)) ; -1 or use a more dynamic check for variable arity handling
-   (Bind 'read-str (PrimOpV (λ (args)
+   (Bind 'read-str (PrimOpV (λ ([args : (Listof ExprC)] [env : Env])
                               (begin (printf ">")
-                                     (cast (read-line) String))) 
-                            0))))
-
+                                     (let ([input (read-line)])
+                                       (match input
+                                         [(? string?) input]
+                                         [(? eof-object?) (error 'read-str "ZODE: Invalid input: ~e" input)]))))
+                            0))
+   (Bind 'seq (PrimOpV (λ ([args : (Listof ExprC)] [env : Env])
+                         (seq args env))
+                       -1))
+   (Bind '++ (PrimOpV (λ ([args : (Listof ExprC)] [env : Env])
+                        (concat args env))
+                      -1))))
 
 
 ; takes in a list of parameters and a list of arguments and extends an environment by binding the corresponding values
@@ -237,9 +220,11 @@
     [(StrC str) str]
     [(IfC test then else) 
      (let ([test-result : Value (interp test env)])
-       (if (and (boolean? test-result) test-result)
-           (interp then env)
-           (interp else env)))]
+       (if (boolean? test-result)
+           (if test-result
+               (interp then env)
+               (interp else env))
+           (error 'interp "ZODE: if test is not a boolean: ~e" e)))]
     [(LambC params body) (CloV params body env)]
     [(AppC func args) 
      (let ([f : Value (interp func env)])
@@ -252,19 +237,14 @@
             [else (error 'interp "ZODE: Incorrect number of arguments for function: expected ~a, got ~a" (length params)
                          (length args))])]
          [(PrimOpV proc arity)
-          (if (= arity (length args))
-              ; Evaluate args here because primops expect evaluated arguments
-              (let ([evaluated-args : (Listof Value) (evaluate-arguments args env)])
-                (proc evaluated-args))
+          (if (or (equal? -1 arity)
+                  (equal? arity (length args)))
+              (proc args env)
               (error 'interp "ZODE: Incorrect number of arguments for primop: expected ~a, got ~a" arity
                      (length args)))]
          [else
           (error 'interp "ZODE: Cannot apply as a function: ~e" f)]))]))
 
-; Helper function to evaluate arguments for primops, since extend-env handles unevaluated ExprC for closures
-(define (evaluate-arguments [args : (Listof ExprC)] [env : Env]) : (Listof Value)
-  (for/list ([arg : ExprC (in-list args)])
-    (interp arg env)))
 
 
 ; takes in a ZODE4 value and converts it into a string
@@ -275,14 +255,13 @@
                     [(boolean=? #t v) "true"]
                     [else "false"])]
     [(CloV _ _ _) "#<procedure>"]
-    #;[(PrimOpV _ _) "#<primop>"]))
-
+    [(PrimOpV _ _) "#<primop>"]))
 
 
 ; combines parse and interp
 (define (top-interp [s : Sexp]) : String
   (serialize (interp (parse s) top-env)))
- 
+
 
 
 
@@ -292,6 +271,8 @@
 (check-equal? (parse "string") (StrC "string"))
 (check-exn #rx"ZODE: Invalid use of reserved keyword as an identifier" (λ () (parse 'if)))
 (check-exn #rx"ZODE: Invalid concrete syntax, cannot parse" (λ () (parse #f)))
+(check-exn #rx"ZODE: Cannot have two parameters with the same name"
+           (λ () (parse '{locals : z = {lamb : : 3} : z = 9 : {z}})))
 
 ; parse-if tests
 (check-equal? (parse '{if : 0 : b : "hi"}) (IfC (NumC 0) (IdC 'b) (StrC "hi")))
@@ -306,7 +287,7 @@
                                                  (NumC 3.14))))
 (check-exn #rx"ZODE: Incorrect number of parameters in clauses" (λ () (parse '{locals : "hi" : 'm})))
 (check-exn #rx"ZODE: Clauses not formatted correctly" (λ () (parse '{locals : 1 2 3 : 'no})))
- 
+
 ; parse-clauses tests
 (check-equal? (parse-clauses '{{x = 5 :} {y = "z" :}}) (list '(x y) (list (NumC 5) (StrC "z"))))
 (check-equal? (parse-clauses '{{x = 5 :}}) (list '(x) (list (NumC 5))))
@@ -336,7 +317,7 @@
 (check-exn #rx"ZODE: Cannot apply as a function" (λ () (interp (IfC (IdC 'false)
                                                                     (IdC 'bye)
                                                                    (AppC (NumC pi) '()))
-                                                               (list (Bind 'false #f))))) 
+                                                               (list (Bind 'false #f)))))
                                         
 ; lookup tests
 (check-equal? (lookup 'here (list (Bind 'here #t) (Bind 'nothere "nope"))) #t)
@@ -366,6 +347,9 @@
                                          : {if : {equal? 1 1}
                                                : {* {/ 2 2} 1}
                                                : false}}}) "1")
+(check-exn #rx"ZODE: if test is not a boolean" (λ () (top-interp '{if : {+ 3 4} : 8 : 7})))
+
+; primop tests
 (check-exn #rx"ZODE: Arguments to +" (λ () (top-interp '{+ "true" "false"})))
 (check-exn #rx"ZODE: Arguments to -" (λ () (top-interp '{- "true" "false"})))
 (check-exn #rx"ZODE: Arguments to *" (λ () (top-interp '{* "true" "false"})))
@@ -380,18 +364,24 @@
 ;(check-equal? (top-interp '{read-num}) "100")
 ;(check-equal? (top-interp '{read-str}) "\"hundred\"")
 ;(check-exn #rx"ZODE: Input is not a real" (λ () (top-interp '{read-num})))
+(check-equal? (top-interp '{seq {println "hi"}
+                                {+ 0 1}}) "1")
+(check-exn #rx"ZODE: seq requires at least" (λ () (top-interp '{seq})))
+(check-equal? (top-interp '{++ 0 " as a string is "
+                               {locals : x = 1 : "zero"}}) "\"0 as a string is zero\"")
 
 
-; Assuming a direct environment and seq function available
-(check-equal? (seq (list 1 2 3)) 3 "seq should return the last number")
-(check-equal? (seq (list "hello" " " "world")) "world" "seq should return the last string")
-(check-equal? (seq (list true false true)) true "seq should return the last boolean") 
- 
-; Handling edge case with an empty list
-(check-exn exn:fail? (lambda () (seq '())) "seq should fail on empty list")
- 
-(check-equal? (concatenate (list "Data" " " "Science"))
-              "Data Science"
-              "concatenate should combine words into a phrase")
 
 
+; ZODE program
+(define rps '{locals : game = {lamb : : {seq {println "Enter your next move (rock/paper/scissors)>"}
+                                             {locals : in = {read-str}
+                                                     : {seq {if : {equal? in "rock"}
+                                                                : {println "I play paper."}
+                                                                : {if : {equal? in "paper"}
+                                                                      : {println "I play scissors."}
+                                                                      : {if : {equal? in "scissors"}
+                                                                            : {println "I play rock."}
+                                                                            : {println "That's not allowed."}}}}
+                                                            {println "I win. You lose."}}}}}
+                     : {game}})
