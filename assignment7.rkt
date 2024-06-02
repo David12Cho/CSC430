@@ -17,14 +17,14 @@
 (define (parse [s : Sexp]) : ExprC
   (match s
     [(? real? n) (NumC n)]
-    [(? symbol? sym) (if (member sym '(if lamb locals : =)) 
+    [(? symbol? sym) (if (member sym '(if lamb locals locals-rec -> : =)) 
                          (error "ZODE: Invalid use of reserved keyword as an identifier: ~e" sym)
                          (IdC sym))] 
     [(? string? str) (StrC str)]
     [(cons f r) (match f
                   ['if (parse-if r)]
-                  ['locals (parse-locals r)]
-                  ['lamb (parse-lamb r)]
+                  ;['locals (parse-locals r)]
+                  ;['lamb (parse-lamb r)]
                   [other (parse-app s)])]
     [other (error 'parse "ZODE: Invalid concrete syntax, cannot parse: ~e" s)]))
 
