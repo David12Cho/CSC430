@@ -1,0 +1,2 @@
+#lang algol60
+(require algol60/algol60)
